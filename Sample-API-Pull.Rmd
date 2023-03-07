@@ -1,0 +1,77 @@
+---
+title: "Sample API pull"
+output: html_document
+date: "2023-02-17"
+---
+
+Load libraries
+
+```{r}
+library(httr) # get requests
+library(jsonlite) # convert data types
+```
+
+Step 1, get a taxon ID for the host plant of interest, using the Taxon API. In this example, we'll search for Abies lasiocarpa. Note that we need to use percent encoding to handle the space between the genus and the specific epithet (%20). The `in_estonia=TRUE` ensures we only pull IDs for taxon with records in PlutoF. This script assumes that we'll only pull one taxon ID with this request.
+
+```{r}
+abiesLasiocarpa_get <- httr::GET('https://api.plutof.ut.ee/v1/public/taxa/autocomplete/?name=Abies%20lasiocarpa&in_estonia=true')
+```
+
+We get back a JSON formatted object, where the information we need is in raw Unicode under the 'content' list. We'll convert this to character data, and then from a JSON foratted object to something R knows how to work with.
+
+```{r}
+abiesLasiocarpa_char <- jsonlite::fromJSON(rawToChar(abiesLasiocarpa_get$content))
+```
+
+The resulting object is somewhat deeply nested. What we need to pull is the taxon ID for the host species we're interested in, as this will allow us to search then for other specimens that have this plant as an interacting taxa. So, to get the ID of the host:
+
+```{r}
+abiesLasiocarpa_id <- abiesLasiocarpa_char$data$id
+```
+
+We can confirm the length of `abiesLasiocarpa_id`
+
+```{r}
+length(abiesLasiocarpa_id)
+```
+
+Next, we use the Taxon Occurrence API to find where this ID is listed in either an Observation, Specimen, or LivingSpecimen as an interacting taxa
+
+```{r}
+osl_get <- httr::GET(paste0("https://api.plutof.ut.ee/v1/public/taxonoccurrence/?types=Observation,Specimen,LivingSpecimen&interacting_taxa=", abiesLasiocarpa_id))
+```
+
+Like above, we need to get this into something R can work with
+
+```{r}
+osl_char <- jsonlite::fromJSON(rawToChar(osl_get$content))
+```
+
+We get back a list of specimens that have a taxon ID, but no species name associated with them. So, we need to pull the IDs and then search for the associated records to get the names. First, we pull the IDs
+
+```{r}
+osl_taxons <- osl_char$data$relationships$taxon_node$data$id
+```
+
+This time we're dealing with a vector of length greater than 1 so we need to iterate. To verify
+
+```{r}
+length(osl_taxons)
+```
+
+Then we iterate through these IDs, plugging them into the API and pulling only the name.
+
+```{r}
+it_names <- vector()
+
+for (i in 1:length(osl_taxons)) {
+  get <- httr::GET(paste0("https://api.plutof.ut.ee/v1/public/taxa/",osl_taxons[i]))
+  char <- jsonlite::fromJSON(rawToChar(get$content))
+  name <- char$data$attribute$name
+  it_names[i] <- name
+}
+
+it_names
+```
+
+The first part of this could be iterated too, but will require some error checking in case we get back a non 200 status code, an empty record, etc as well as some pausing to be kind to the servers! I don't think we're going to pull a lot of records with this though.
